@@ -1,0 +1,83 @@
+name: Free VPS with Pterodactyl Panel
+
+on:
+  workflow_dispatch:  # Jalankan manual kapan saja
+  schedule:
+    - cron: '0 */6 * * *'  # Opsional: jalan otomatis setiap 6 jam
+
+jobs:
+  vps-pterodactyl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # Maksimal 6 jam
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt update
+          sudo apt install -y curl wget sudo tmate neofetch zip unzip
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+      - name: Start Tailscale
+        env:
+          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          sudo tailscaled &
+          sleep 5
+          sudo tailscale up --authkey $TS_AUTHKEY --hostname=pterovps
+
+      - name: Install Pterodactyl Panel + Wings (Option 2)
+        run: |
+          sudo bash <(curl -s https://pterodactyl-installer.se) << EOF
+          2
+          y
+          y
+          panel
+          pterodactyl
+          P@ssw0rd12345
+          P@ssw0rd12345
+          UTC
+          admin@example.com
+          admin
+          Admin
+          User
+          adminpassword123
+          $(curl -s ifconfig.me)
+          n
+          y
+          $(curl -s ifconfig.me)
+          n
+          y
+          y
+          y
+          EOF
+
+      - name: Show connection info
+        run: |
+          echo "=========================================="
+          echo "✅ VPS + Pterodactyl Panel READY!"
+          echo "=========================================="
+          echo ""
+          echo "📡 Tailscale IP:"
+          sudo tailscale ip -4
+          echo ""
+          echo "🔗 Pterodactyl Panel:"
+          echo "http://$(sudo tailscale ip -4)"
+          echo ""
+          echo "🔑 Login Credentials:"
+          echo "Username: admin"
+          echo "Password: adminpassword123"
+          echo ""
+          echo "=========================================="
+
+      - name: Start tmate (alternative access)
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 350
+
+      - name: Keep alive
+        run: sleep 21000  # ~6 jam
