@@ -1,4 +1,4 @@
-name: Simple VPS + Pterodactyl
+name: Pterodactyl VPS - Docker Version
 
 on:
   workflow_dispatch:
@@ -9,33 +9,49 @@ jobs:
     timeout-minutes: 350
 
     steps:
-    - name: Install Dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y nginx php8.1 php8.1-fpm php8.1-mysql mysql-server curl wget
+      - name: Install Docker
+        run: |
+          sudo apt update
+          sudo apt install -y docker.io docker-compose curl wget
+          sudo systemctl start docker
 
-    - name: Start Services
-      run: |
-        sudo systemctl start nginx mysql
-        sudo systemctl enable nginx mysql
+      - name: Run Pterodactyl Panel with Docker
+        run: |
+          mkdir -p ~/pterodactyl
+          cd ~/pterodactyl
+          cat > docker-compose.yml <<EOF
+          version: '3'
+          services:
+            panel:
+              image: ghcr.io/pterodactyl/panel:latest
+              ports:
+                - "80:80"
+              environment:
+                - APP_URL=http://localhost
+                - DB_HOST=db
+                - DB_PORT=3306
+                - DB_DATABASE=panel
+                - DB_USERNAME=pterodactyl
+                - DB_PASSWORD=password123
+              depends_on:
+                - db
+            db:
+              image: mariadb:10
+              environment:
+                - MYSQL_DATABASE=panel
+                - MYSQL_USER=pterodactyl
+                - MYSQL_PASSWORD=password123
+                - MYSQL_RANDOM_ROOT_PASSWORD=yes
+          EOF
+          sudo docker-compose up -d
 
-    - name: Create Web Directory
-      run: |
-        sudo mkdir -p /var/www/html
-        echo "<?php phpinfo(); ?>" | sudo tee /var/www/html/index.php
-        sudo chown -R www-data:www-data /var/www
+      - name: Show info
+        run: |
+          IP=$(curl -s ifconfig.me)
+          echo "=========================================="
+          echo "✅ DOCKER PTERODACTYL READY!"
+          echo "Panel: http://$IP"
+          echo "=========================================="
 
-    - name: Get IP Info
-      run: |
-        echo "=========================================="
-        echo "✅ VPS READY!"
-        echo "📡 Akses via tmate SSH di bawah"
-        echo "🌐 IP: $(curl -s ifconfig.me)"
-        echo "=========================================="
-        echo ""
-        echo "👉 Setelah tmate terbuka, jalankan:"
-        echo "sudo bash <(curl -s https://pterodactyl-installer.se)"
-        echo ""
-
-    - name: Start tmate SSH
-      uses: mxschmitt/action-tmate@v3
+      - name: tmate SSH
+        uses: mxschmitt/action-tmate@v3
