@@ -1,4 +1,4 @@
-name: Pterodactyl VPS - Docker Version
+name: VPS IP Publik - Pterodactyl Panel
 
 on:
   workflow_dispatch:
@@ -9,49 +9,131 @@ jobs:
     timeout-minutes: 350
 
     steps:
-      - name: Install Docker
+      - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y docker.io docker-compose curl wget
-          sudo systemctl start docker
+          sudo apt install -y curl wget nginx mysql-server php8.1 php8.1-fpm php8.1-mysql php8.1-zip php8.1-curl php8.1-gd php8.1-xml php8.1-mbstring redis-server tar unzip git
 
-      - name: Run Pterodactyl Panel with Docker
+      - name: Start services
         run: |
-          mkdir -p ~/pterodactyl
-          cd ~/pterodactyl
-          cat > docker-compose.yml <<EOF
-          version: '3'
-          services:
-            panel:
-              image: ghcr.io/pterodactyl/panel:latest
-              ports:
-                - "80:80"
-              environment:
-                - APP_URL=http://localhost
-                - DB_HOST=db
-                - DB_PORT=3306
-                - DB_DATABASE=panel
-                - DB_USERNAME=pterodactyl
-                - DB_PASSWORD=password123
-              depends_on:
-                - db
-            db:
-              image: mariadb:10
-              environment:
-                - MYSQL_DATABASE=panel
-                - MYSQL_USER=pterodactyl
-                - MYSQL_PASSWORD=password123
-                - MYSQL_RANDOM_ROOT_PASSWORD=yes
-          EOF
-          sudo docker-compose up -d
+          sudo systemctl start nginx mysql php8.1-fpm redis-server
+          sudo systemctl enable nginx mysql php8.1-fpm redis-server
 
-      - name: Show info
+      - name: Setup database
+        run: |
+          sudo mysql -e "CREATE DATABASE IF NOT EXISTS panel;"
+          sudo mysql -e "CREATE USER IF NOT EXISTS 'pterodactyl'@'localhost' IDENTIFIED BY 'P@ssw0rd12345';"
+          sudo mysql -e "GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'localhost';"
+          sudo mysql -e "FLUSH PRIVILEGES;"
+
+      - name: Install Pterodactyl Panel
+        run: |
+          cd /var/www
+          sudo curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
+          sudo tar -xzvf panel.tar.gz
+          sudo mv panel-* panel
+          cd panel
+          sudo cp .env.example .env
+          sudo composer install --no-dev --no-interaction
+          sudo php artisan key:generate
+          
+          # Konfigurasi .env
+          sudo sed -i "s/DB_PASSWORD=/DB_PASSWORD=P@ssw0rd12345/g" .env
+          sudo sed -i "s/APP_URL=/APP_URL=http:\/\/$(curl -s ifconfig.me)/g" .env
+          
+          sudo php artisan migrate --force --no-interaction
+          sudo php artisan db:seed --force --no-interaction
+
+      - name: Create admin user
+        run: |
+          cd /var/www/panel
+          sudo php artisan p:user:make << EOF
+          admin@panel.local
+          Admin
+          admin
+          adminpassword123
+          yes
+          EOF
+
+      - name: Configure Nginx
+        run: |
+          sudo bash -c 'cat > /etc/nginx/sites-available/pterodactyl << "EOF"
+          server {
+              listen 80;
+              server_name _;
+              root /var/www/panel/public;
+              index index.php;
+              client_max_body_size 100M;
+              location / {
+                  try_files $uri $uri/ /index.php?$query_string;
+              }
+              location ~ \.php$ {
+                  fastcgi_split_path_info ^(.+\.php)(/.+)$;
+                  fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
+                  fastcgi_index index.php;
+                  include fastcgi_params;
+                  fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+              }
+              location ~ /\.ht {
+                  deny all;
+              }
+          }
+          EOF'
+          sudo ln -s /etc/nginx/sites-available/pterodactyl /etc/nginx/sites-enabled/
+          sudo rm -f /etc/nginx/sites-enabled/default
+          sudo systemctl restart nginx
+          sudo chown -R www-data:www-data /var/www/panel/storage /var/www/panel/bootstrap/cache
+
+      - name: Setup Wings (Node)
+        run: |
+          sudo mkdir -p /etc/pterodactyl
+          sudo curl -L -o /usr/local/bin/wings https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_amd64
+          sudo chmod u+x /usr/local/bin/wings
+          sudo bash -c 'cat > /etc/systemd/system/wings.service << "EOF"
+          [Unit]
+          Description=Pterodactyl Wings Daemon
+          After=docker.service
+          Requires=docker.service
+          [Service]
+          User=root
+          WorkingDirectory=/etc/pterodactyl
+          LimitNOFILE=4096
+          PIDFile=/var/run/wings/daemon.pid
+          ExecStart=/usr/local/bin/wings
+          Restart=on-failure
+          StartLimitInterval=180
+          StartLimitBurst=30
+          RestartSec=5s
+          [Install]
+          WantedBy=multi-user.target
+          EOF'
+          sudo systemctl enable wings
+
+      - name: Show connection info
         run: |
           IP=$(curl -s ifconfig.me)
+          echo ""
           echo "=========================================="
-          echo "✅ DOCKER PTERODACTYL READY!"
-          echo "Panel: http://$IP"
+          echo "✅ VPS + PTERODACTYL PANEL READY!"
+          echo "=========================================="
+          echo ""
+          echo "🌐 PUBLIC IP: $IP"
+          echo "🔗 PANEL URL: http://$IP"
+          echo ""
+          echo "🔑 LOGIN CREDENTIALS:"
+          echo "Email: admin@panel.local"
+          echo "Password: adminpassword123"
+          echo ""
+          echo "💻 DATABASE:"
+          echo "Database: panel"
+          echo "Username: pterodactyl"
+          echo "Password: P@ssw0rd12345"
+          echo ""
+          echo "⚙️ WINGS: systemctl start wings"
+          echo ""
+          echo "=========================================="
+          echo "⚠️  PANEL AKTIF SELAMA 6 JAM SAJA"
           echo "=========================================="
 
-      - name: tmate SSH
-        uses: mxschmitt/action-tmate@v3
+      - name: Keep alive
+        run: sleep 21000
