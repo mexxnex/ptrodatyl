@@ -1,73 +1,60 @@
-name: Free VPS with Tailscale (Root Access)
+name: VPS with Tailscale (Fixed)
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 */6 * * *'
 
 jobs:
-  vps-session:
+  vps:
     runs-on: ubuntu-latest
     timeout-minutes: 350
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install prerequisites
-        run: |
-          sudo apt update
-          sudo apt install -y curl wget sudo tmate neofetch zip unzip
-
       - name: Install Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
 
-      - name: Start Tailscale
+      - name: Start Tailscale (clean method)
         env:
           TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
-          sudo tailscaled &
-          sleep 5
-          sudo tailscale up --authkey $TS_AUTHKEY --hostname=free-vps
-
-      - name: Enable root SSH access
-        run: |
-          # Set root password
-          echo "root:VpsRootPass123!" | sudo chpasswd
+          # Kill existing tailscaled if any
+          sudo pkill tailscaled || true
+          sudo rm -f /var/run/tailscale/tailscaled.sock
           
-          # Enable root login via SSH
+          # Start fresh
+          sudo tailscaled --state=/var/lib/tailscale/tailscaled.state &
+          sleep 5
+          
+          # Connect
+          sudo tailscale up --authkey=$TS_AUTHKEY --hostname=github-vps --accept-routes
+
+      - name: Setup root SSH
+        run: |
+          echo "root:TaichelPass123!" | sudo chpasswd
           sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
           sudo sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
           sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          
-          # Restart SSH
           sudo systemctl restart ssh
 
       - name: Show connection info
         run: |
           TS_IP=$(sudo tailscale ip -4)
           echo "=========================================="
-          echo "✅ VPS WITH ROOT ACCESS READY!"
+          echo "✅ VPS with TAICHEL (Tailscale) READY!"
           echo "=========================================="
           echo ""
           echo "📡 Tailscale IP: $TS_IP"
-          echo "🌐 Public IP (via Tailscale): $TS_IP"
           echo ""
           echo "🔑 ROOT ACCESS:"
-          echo "Username: root"
-          echo "Password: VpsRootPass123!"
-          echo ""
-          echo "🔗 Connect via:"
           echo "  ssh root@$TS_IP"
+          echo "  Password: TaichelPass123!"
           echo ""
-          echo "💡 Install Tailscale on your local device first!"
-          echo "   https://tailscale.com/download"
+          echo "📥 Install Tailscale pertama di komputer kamu:"
+          echo "  https://tailscale.com/download"
           echo "=========================================="
 
-      - name: Start tmate (backup access)
+      - name: tmate backup
         uses: mxschmitt/action-tmate@v3
-        timeout-minutes: 350
 
       - name: Keep alive
         run: sleep 21000
