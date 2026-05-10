@@ -1,139 +1,73 @@
-name: VPS IP Publik - Pterodactyl Panel
+name: Free VPS with Tailscale (Root Access)
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
 
 jobs:
-  vps:
+  vps-session:
     runs-on: ubuntu-latest
     timeout-minutes: 350
 
     steps:
-      - name: Install dependencies
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install prerequisites
         run: |
           sudo apt update
-          sudo apt install -y curl wget nginx mysql-server php8.1 php8.1-fpm php8.1-mysql php8.1-zip php8.1-curl php8.1-gd php8.1-xml php8.1-mbstring redis-server tar unzip git
+          sudo apt install -y curl wget sudo tmate neofetch zip unzip
 
-      - name: Start services
+      - name: Install Tailscale
         run: |
-          sudo systemctl start nginx mysql php8.1-fpm redis-server
-          sudo systemctl enable nginx mysql php8.1-fpm redis-server
+          curl -fsSL https://tailscale.com/install.sh | sh
 
-      - name: Setup database
+      - name: Start Tailscale
+        env:
+          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
-          sudo mysql -e "CREATE DATABASE IF NOT EXISTS panel;"
-          sudo mysql -e "CREATE USER IF NOT EXISTS 'pterodactyl'@'localhost' IDENTIFIED BY 'P@ssw0rd12345';"
-          sudo mysql -e "GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'localhost';"
-          sudo mysql -e "FLUSH PRIVILEGES;"
+          sudo tailscaled &
+          sleep 5
+          sudo tailscale up --authkey $TS_AUTHKEY --hostname=free-vps
 
-      - name: Install Pterodactyl Panel
+      - name: Enable root SSH access
         run: |
-          cd /var/www
-          sudo curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
-          sudo tar -xzvf panel.tar.gz
-          sudo mv panel-* panel
-          cd panel
-          sudo cp .env.example .env
-          sudo composer install --no-dev --no-interaction
-          sudo php artisan key:generate
+          # Set root password
+          echo "root:VpsRootPass123!" | sudo chpasswd
           
-          # Konfigurasi .env
-          sudo sed -i "s/DB_PASSWORD=/DB_PASSWORD=P@ssw0rd12345/g" .env
-          sudo sed -i "s/APP_URL=/APP_URL=http:\/\/$(curl -s ifconfig.me)/g" .env
+          # Enable root login via SSH
+          sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
           
-          sudo php artisan migrate --force --no-interaction
-          sudo php artisan db:seed --force --no-interaction
-
-      - name: Create admin user
-        run: |
-          cd /var/www/panel
-          sudo php artisan p:user:make << EOF
-          admin@panel.local
-          Admin
-          admin
-          adminpassword123
-          yes
-          EOF
-
-      - name: Configure Nginx
-        run: |
-          sudo bash -c 'cat > /etc/nginx/sites-available/pterodactyl << "EOF"
-          server {
-              listen 80;
-              server_name _;
-              root /var/www/panel/public;
-              index index.php;
-              client_max_body_size 100M;
-              location / {
-                  try_files $uri $uri/ /index.php?$query_string;
-              }
-              location ~ \.php$ {
-                  fastcgi_split_path_info ^(.+\.php)(/.+)$;
-                  fastcgi_pass unix:/var/run/php/php8.1-fpm.sock;
-                  fastcgi_index index.php;
-                  include fastcgi_params;
-                  fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
-              }
-              location ~ /\.ht {
-                  deny all;
-              }
-          }
-          EOF'
-          sudo ln -s /etc/nginx/sites-available/pterodactyl /etc/nginx/sites-enabled/
-          sudo rm -f /etc/nginx/sites-enabled/default
-          sudo systemctl restart nginx
-          sudo chown -R www-data:www-data /var/www/panel/storage /var/www/panel/bootstrap/cache
-
-      - name: Setup Wings (Node)
-        run: |
-          sudo mkdir -p /etc/pterodactyl
-          sudo curl -L -o /usr/local/bin/wings https://github.com/pterodactyl/wings/releases/latest/download/wings_linux_amd64
-          sudo chmod u+x /usr/local/bin/wings
-          sudo bash -c 'cat > /etc/systemd/system/wings.service << "EOF"
-          [Unit]
-          Description=Pterodactyl Wings Daemon
-          After=docker.service
-          Requires=docker.service
-          [Service]
-          User=root
-          WorkingDirectory=/etc/pterodactyl
-          LimitNOFILE=4096
-          PIDFile=/var/run/wings/daemon.pid
-          ExecStart=/usr/local/bin/wings
-          Restart=on-failure
-          StartLimitInterval=180
-          StartLimitBurst=30
-          RestartSec=5s
-          [Install]
-          WantedBy=multi-user.target
-          EOF'
-          sudo systemctl enable wings
+          # Restart SSH
+          sudo systemctl restart ssh
 
       - name: Show connection info
         run: |
-          IP=$(curl -s ifconfig.me)
-          echo ""
+          TS_IP=$(sudo tailscale ip -4)
           echo "=========================================="
-          echo "✅ VPS + PTERODACTYL PANEL READY!"
+          echo "✅ VPS WITH ROOT ACCESS READY!"
           echo "=========================================="
           echo ""
-          echo "🌐 PUBLIC IP: $IP"
-          echo "🔗 PANEL URL: http://$IP"
+          echo "📡 Tailscale IP: $TS_IP"
+          echo "🌐 Public IP (via Tailscale): $TS_IP"
           echo ""
-          echo "🔑 LOGIN CREDENTIALS:"
-          echo "Email: admin@panel.local"
-          echo "Password: adminpassword123"
+          echo "🔑 ROOT ACCESS:"
+          echo "Username: root"
+          echo "Password: VpsRootPass123!"
           echo ""
-          echo "💻 DATABASE:"
-          echo "Database: panel"
-          echo "Username: pterodactyl"
-          echo "Password: P@ssw0rd12345"
+          echo "🔗 Connect via:"
+          echo "  ssh root@$TS_IP"
           echo ""
-          echo "⚙️ WINGS: systemctl start wings"
-          echo ""
+          echo "💡 Install Tailscale on your local device first!"
+          echo "   https://tailscale.com/download"
           echo "=========================================="
-          echo "⚠️  PANEL AKTIF SELAMA 6 JAM SAJA"
-          echo "=========================================="
+
+      - name: Start tmate (backup access)
+        uses: mxschmitt/action-tmate@v3
+        timeout-minutes: 350
 
       - name: Keep alive
         run: sleep 21000
